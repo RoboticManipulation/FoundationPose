@@ -25,6 +25,10 @@ conda init
 source ~/.bashrc
 conda activate my
 
+## When running the container first time 
+
+bash build_all.sh
+
 # Verify Installation
 python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"
 
