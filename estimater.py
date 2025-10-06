@@ -117,7 +117,45 @@ class FoundationPose:
 
     rot_grid = np.asarray(rot_grid)
     logging.info(f"rot_grid:{rot_grid.shape}")
-    rot_grid = mycpp.cluster_poses(30, 99999, rot_grid, self.symmetry_tfs.data.cpu().numpy())
+    # Python implementation to avoid segfault
+    def cluster_poses_python(ang_dist_th, trans_dist_th, poses_in, symmetry_tfs):
+        import numpy as np
+        from scipy.spatial.transform import Rotation as R
+        
+        poses_out = []
+        used = np.zeros(len(poses_in), dtype=bool)
+        
+        for i in range(len(poses_in)):
+            if used[i]:
+                continue
+            
+            cluster = [poses_in[i]]
+            used[i] = True
+            
+            for j in range(i + 1, len(poses_in)):
+                if used[j]:
+                    continue
+                
+                # Check angular distance
+                r1 = R.from_matrix(poses_in[i][:3, :3])
+                r2 = R.from_matrix(poses_in[j][:3, :3])
+                ang_dist = np.degrees(np.linalg.norm((r1.inv() * r2).as_rotvec()))
+                
+                # Check translation distance
+                trans_dist = np.linalg.norm(poses_in[i][:3, 3] - poses_in[j][:3, 3])
+                
+                if ang_dist < ang_dist_th and trans_dist < trans_dist_th:
+                    cluster.append(poses_in[j])
+                    used[j] = True
+            
+            # Use median of cluster
+            poses_out.append(cluster[0])
+        
+        return np.array(poses_out)
+
+    rot_grid = cluster_poses_python(30, 99999, rot_grid, self.symmetry_tfs.data.cpu().numpy())
+
+    # rot_grid = mycpp.cluster_poses(30, 99999, rot_grid, self.symmetry_tfs.data.cpu().numpy())
     rot_grid = np.asarray(rot_grid)
     logging.info(f"after cluster, rot_grid:{rot_grid.shape}")
     self.rot_grid = torch.as_tensor(rot_grid, device='cuda', dtype=torch.float)
