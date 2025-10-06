@@ -21,6 +21,7 @@ xhost + && docker run --gpus all --env NVIDIA_DISABLE_REQUIRE=1 -it \
 
 # Inside the container
 
+conda init
 source ~/.bashrc
 conda activate my
 
