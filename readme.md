@@ -1,4 +1,60 @@
 # FoundationPose: Unified 6D Pose Estimation and Tracking of Novel Objects
+
+## Running the docker setup on RTX 4080 Super with Ubuntu 24.04 & CUDA 12.8 
+```
+
+docker pull yanglicb/foundationpose-cuda128:latest
+
+docker rm -f foundationpose
+DIR=$(pwd)
+xhost + && docker run --gpus all --env NVIDIA_DISABLE_REQUIRE=1 -it \
+  --network=host --name foundationpose \
+  --cap-add=SYS_PTRACE --security-opt seccomp=unconfined \
+  -v $DIR:$DIR \
+  -v /tmp/.X11-unix:/tmp/.X11-unix \
+  -v /tmp:/tmp \
+  --ipc=host \
+  -e DISPLAY=${DISPLAY} \
+  -e GIT_INDEX_FILE \
+  yanglicb/foundationpose-cuda128:latest \
+  bash -c "cd $DIR && bash"
+
+# Inside the container
+
+source ~/.bashrc
+conda activate my
+
+# Verify Installation
+python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}'); print(f'CUDA version: {torch.version.cuda}')"
+
+
+chmod 777 /tmp
+
+cd /home/user/ehsanullahm1/codebase/FoundationPose
+python run_demo.py
+
+
+# If getting any issues when running the demo
+
+cd /home/user/ehsanullahm1/codebase/FoundationPose/mycpp
+rm -rf build build_new
+
+mkdir build
+cd build
+CMAKE_PREFIX_PATH=$CONDA_PREFIX/lib/python3.9/site-packages/pybind11/share/cmake/pybind11 cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j8
+
+# Check the Result
+ls -la /home/user/ehsanullahm1/codebase/FoundationPose/mycpp/build/mycpp*.so
+
+cp mycpp.cpython-39-x86_64-linux-gnu.so ../
+
+
+
+```
+
+
+
 [[Paper]](https://arxiv.org/abs/2312.08344) [[Website]](https://nvlabs.github.io/FoundationPose/)
 
 This is the official implementation of our paper to be appeared in CVPR 2024 (Highlight)
