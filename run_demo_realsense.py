@@ -1,3 +1,4 @@
+import os
 import pyrealsense2 as rs
 import numpy as np
 import cv2
@@ -19,18 +20,46 @@ if __name__ == '__main__':
     
     # Configure RealSense pipeline
     pipeline = rs.pipeline()
-    config = rs.config()
-    
-    # Enable depth and color streams (D405 supports up to 1280x720 @ 30fps)
-    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-    
-    # Start streaming
     print("Starting RealSense camera...")
-    profile = pipeline.start(config)
-    
-    # Get camera intrinsics
-    color_profile = profile.get_stream(rs.stream.color)
+
+    profile = None
+
+    # Try a couple of common RealSense RGBD profiles, then fall back
+    for w, h in [ (848, 480)]: # (848, 480), (640, 480)
+        try:
+            config = rs.config()
+            config.enable_stream(rs.stream.depth, w, h, rs.format.z16, 30)
+            config.enable_stream(rs.stream.color, w, h, rs.format.bgr8, 30)
+            profile = pipeline.start(config)
+            print(f"RealSense started with {w}x{h} depth/color @ 30 FPS")
+            break
+        except RuntimeError as e:
+            print(f"Failed to start RealSense with {w}x{h} streams: {e}")
+        except Exception as e:
+            print(f"Configuration {w}x{h} not supported: {e}")
+
+    if profile is None:
+        # Last resort: let RealSense choose a default configuration
+        try:
+            profile = pipeline.start()
+            print("RealSense started with default configuration")
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Unable to start RealSense pipeline with any configuration: {e}"
+            )
+
+    # Get camera intrinsics (requires a color stream to be available)
+    try:
+        color_profile = profile.get_stream(rs.stream.color)
+    except RuntimeError as e:
+        pipeline.stop()
+        raise RuntimeError(
+            "RealSense pipeline started but no color stream is available. "
+            "This demo expects an RGB-D camera; if you are using a depth-only "
+            f"device (e.g. certain D40x modules), it cannot run as written. "
+            f"Details: {e}"
+        )
+
     color_intrinsics = color_profile.as_video_stream_profile().get_intrinsics()
     
     K = np.array([
@@ -46,12 +75,16 @@ if __name__ == '__main__':
     
     # Load mesh
     mesh = trimesh.load(args.mesh_file)
-    
+
+    # Compute oriented bounding box
+    to_origin, extents = trimesh.bounds.oriented_bounds(mesh)
+    bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2,3)
+
     # Setup FoundationPose
     scorer = ScorePredictor()
     refiner = PoseRefinePredictor()
     glctx = dr.RasterizeCudaContext()
-    
+
     est = FoundationPose(
         model_pts=mesh.vertices,
         model_normals=mesh.vertex_normals,
@@ -106,8 +139,8 @@ if __name__ == '__main__':
                 pose = est.track_one(rgb=color, depth=depth, K=K, iteration=2)
             
             # Visualize
-            center_pose = pose @ est.to_origin
-            vis = draw_posed_3d_box(K, img=color, ob_in_cam=center_pose, bbox=est.bbox)
+            center_pose = pose @ np.linalg.inv(to_origin)
+            vis = draw_posed_3d_box(K, img=color, ob_in_cam=center_pose, bbox=bbox)
             vis = draw_xyz_axis(vis, ob_in_cam=center_pose, scale=0.1, K=K, thickness=3, transparency=0, is_input_rgb=True)
             
             cv2.imshow('FoundationPose Tracking', vis)
