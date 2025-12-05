@@ -88,47 +88,47 @@ class FoundationPoseROS2(Node):
         )
         
         # Subscribe to camera info to get intrinsics
-        self.camera_info_sub = self.create_subscription(
-            CameraInfo,
-            '/camera/camera/color/camera_info',
-            self.camera_info_callback,
-            10
-        )
-        
-        # Synchronized subscribers for color and depth images (RealSense)
-        self.color_sub = message_filters.Subscriber(
-            self,
-            ROSImage,
-            '/camera/camera/color/image_rect_raw',
-            qos_profile=qos
-        )
-        self.depth_sub = message_filters.Subscriber(
-            self,
-            ROSImage,
-            '/camera/camera/aligned_depth_to_color/image_raw',
-            qos_profile=qos
-        )
-        
         # self.camera_info_sub = self.create_subscription(
         #     CameraInfo,
-        #     '/sim_camera_info',
+        #     '/camera/camera/color/camera_info',
         #     self.camera_info_callback,
         #     10
         # )
         
-        # # Synchronized subscribers for color and depth images
+        # # Synchronized subscribers for color and depth images (RealSense)
         # self.color_sub = message_filters.Subscriber(
         #     self,
         #     ROSImage,
-        #     '/sim_camera_rgb',
+        #     '/camera/camera/color/image_rect_raw',
         #     qos_profile=qos
         # )
         # self.depth_sub = message_filters.Subscriber(
         #     self,
         #     ROSImage,
-        #     '/sim_camera_depth',
+        #     '/camera/camera/aligned_depth_to_color/image_raw',
         #     qos_profile=qos
         # )
+        
+        self.camera_info_sub = self.create_subscription(
+            CameraInfo,
+            '/sim_camera_info',
+            self.camera_info_callback,
+            10
+        )
+        
+        # Synchronized subscribers for color and depth images
+        self.color_sub = message_filters.Subscriber(
+            self,
+            ROSImage,
+            '/sim_camera_rgb',
+            qos_profile=qos
+        )
+        self.depth_sub = message_filters.Subscriber(
+            self,
+            ROSImage,
+            '/sim_camera_depth',
+            qos_profile=qos
+        )
         
         # Time synchronizer for color and depth
         self.sync = message_filters.ApproximateTimeSynchronizer(
@@ -288,8 +288,9 @@ class FoundationPoseROS2(Node):
                 # Initial pose estimation - use larger mask (80% of image) to increase chance of valid depth
                 mask = np.zeros(color.shape[:2], dtype=np.uint8)
                 h, w = mask.shape
-                margin_h, margin_w = h // 10, w // 10  # 10% margin on each side
-                mask[margin_h:h-margin_h, margin_w:w-margin_w] = 255
+                # margin_h, margin_w = h // 10, w // 10  # 10% margin on each side
+                # mask[margin_h:h-margin_h, margin_w:w-margin_w] = 255
+                mask = np.ones(color.shape[:2], dtype=np.uint8) * 255
                 
                 # Check how much valid depth we have in the masked region
                 valid_depth_in_mask = np.sum((depth > 0.1) & (depth < 3.0) & (mask > 0))
