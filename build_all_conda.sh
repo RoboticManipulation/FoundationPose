@@ -63,7 +63,7 @@ cd ${PROJ_ROOT} && wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-
 # Clone and install nvdiffrast
 # nvdiffrast needs PyTorch visible during build, so we must disable build isolation.
 cd ${PROJ_ROOT} && ( [ -d nvdiffrast ] || git clone https://github.com/NVlabs/nvdiffrast )
-# cd ${PROJ_ROOT}/nvdiffrast && pip install . --no-build-isolation
+cd ${PROJ_ROOT}/nvdiffrast # && pip install . --no-build-isolation
 export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}} && pip install . --no-build-isolation
 
 # Install mycpp
