@@ -69,14 +69,14 @@ sudo make -j$(nproc-1)
 
 # Install mycuda
 cd ${PROJ_ROOT}/bundlesdf/mycuda && \
-rm -rf build *egg* *.so && \
-python3 -m pip install -e . --no-build-
+rm -rf build *egg* *.so # && \
+# python3 -m pip install -e . --no-build-
 
 
 ## ERROR RESOLUTION for mycuda installation
-# source ~/miniconda3/bin/activate foundationpose_ros && pip uninstall torch torchvision torchaudio -y && pip cache purge
-# source ~/miniconda3/bin/activate foundationpose_ros && pip install torch==2.4.0+cu124 torchvision==0.19.0+cu124 torchaudio==2.4.0+cu124 --index-url https://download.pytorch.org/whl/cu124
-# source ~/miniconda3/bin/activate foundationpose_ros && python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.version.cuda}')"
-# ource ~/miniconda3/bin/activate foundationpose_ros && cd /home/${whoami}/ros2/object_placement/FoundationPose/bundlesdf/mycuda && rm -rf build *egg* *.so && export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}} && python3 -m pip install -e . --no-build-isolation
+source ~/miniconda3/bin/activate foundationpose_ros && pip uninstall torch torchvision torchaudio -y && pip cache purge
+source ~/miniconda3/bin/activate foundationpose_ros && pip install torch==2.4.0+cu124 torchvision==0.19.0+cu124 torchaudio==2.4.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+source ~/miniconda3/bin/activate foundationpose_ros && python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.version.cuda}')"
+source ~/miniconda3/bin/activate foundationpose_ros && cd ${PROJ_ROOT}/bundlesdf/mycuda && rm -rf build *egg* *.so && export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}} && python3 -m pip install -e . --no-build-isolation
 
 cd ${PROJ_ROOT}
