@@ -16,7 +16,7 @@ python -m pip install -r requirements.txt
 # pip install gdown
 
 git clone https://github.com/wkentaro/gdown
-sed -i 's/MAX_NUMBER_FILES = 50/MAX_NUMBER_FILES = 1000/' gdown/gdown/download_folder.py
+sed -i 's/MAX_NUMBER_FILES = 50/MAX_NUMBER_FILES = 10000/' gdown/gdown/download_folder.py
 cd gdown && pip install -e . --no-cache-dir
 
 cd ..
@@ -37,12 +37,13 @@ if [ ! -d "weights" ] && [ ! -d "1jocuP_wFByHw6nME0ZdLDV8HVsRksZNL" ]; then
 else
     echo "Weights folder already exists, skipping download."
 fi
-## demo_data
-if [ ! -d "demo_data" ] && [ ! -d "1PYIuQ6Q6IsF3rpqu5Hclln6Iok6qbUI0" ]; then
-    gdown --folder https://drive.google.com/drive/folders/1PYIuQ6Q6IsF3rpqu5Hclln6Iok6qbUI0?usp=sharing
-else
-    echo "Demo data folder already exists, skipping download."
-fi
+
+# ## demo_data
+# if [ ! -d "demo_data" ] && [ ! -d "1PYIuQ6Q6IsF3rpqu5Hclln6Iok6qbUI0" ]; then
+#     gdown --folder https://drive.google.com/drive/folders/1PYIuQ6Q6IsF3rpqu5Hclln6Iok6qbUI0?usp=sharing
+# else
+#     echo "Demo data folder already exists, skipping download."
+# fi
 
 # Install pybind11
 cd ${PROJ_ROOT} && git clone https://github.com/pybind/pybind11 && \
@@ -62,7 +63,8 @@ cd ${PROJ_ROOT} && wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-
 # Clone and install nvdiffrast
 # nvdiffrast needs PyTorch visible during build, so we must disable build isolation.
 cd ${PROJ_ROOT} && ( [ -d nvdiffrast ] || git clone https://github.com/NVlabs/nvdiffrast )
-cd ${PROJ_ROOT}/nvdiffrast && pip install . --no-build-isolation
+# cd ${PROJ_ROOT}/nvdiffrast && pip install . --no-build-isolation
+export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}} && pip install . --no-build-isolation
 
 # Install mycpp
 cd ${PROJ_ROOT}/mycpp/ && \
