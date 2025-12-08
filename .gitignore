@@ -156,3 +156,12 @@ data/
 logs/
 !BundleTrack/XMem/inference/data
 run_used.yml
+
+
+
+# Build_all_conda.sh related fildependencies
+
+gdown/
+nvdiffrast/
+pybind11/
+eigen-3.4.0/
