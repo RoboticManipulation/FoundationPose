@@ -4,7 +4,7 @@ PROJ_ROOT=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # Install dependencies
 # Using PyTorch with CUDA 12.4 for compatibility with CUDA 12.8
-pip install torch==2.4.0+cu124 torchvision==0.19.0+cu124 torchaudio==2.4.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+pip install torch==2.5.1+cu124 torchvision==0.20.1+cu124 torchaudio==2.5.1+cu124 --index-url https://download.pytorch.org/whl/cu124
 pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable" --no-build-isolation
 python -m pip install -r requirements.txt
 
@@ -58,8 +58,9 @@ cd ${PROJ_ROOT} && wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-
     sudo make install
 
 # Clone and install nvdiffrast
-cd ${PROJ_ROOT} && git clone https://github.com/NVlabs/nvdiffrast 
-cd ${PROJ_ROOT}/nvdiffrast && pip install .
+# nvdiffrast needs PyTorch visible during build, so we must disable build isolation.
+cd ${PROJ_ROOT} && ( [ -d nvdiffrast ] || git clone https://github.com/NVlabs/nvdiffrast )
+cd ${PROJ_ROOT}/nvdiffrast && pip install . --no-build-isolation
 
 # Install mycpp
 cd ${PROJ_ROOT}/mycpp/ && \
@@ -75,7 +76,7 @@ rm -rf build *egg* *.so # && \
 
 ## ERROR RESOLUTION for mycuda installation
 source ~/miniconda3/bin/activate foundationpose_ros && pip uninstall torch torchvision torchaudio -y && pip cache purge
-source ~/miniconda3/bin/activate foundationpose_ros && pip install torch==2.4.0+cu124 torchvision==0.19.0+cu124 torchaudio==2.4.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+source ~/miniconda3/bin/activate foundationpose_ros && pip install torch==2.5.1+cu124 torchvision==0.20.1+cu124 torchaudio==2.5.1+cu124 --index-url https://download.pytorch.org/whl/cu124
 source ~/miniconda3/bin/activate foundationpose_ros && python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.version.cuda}')"
 source ~/miniconda3/bin/activate foundationpose_ros && cd ${PROJ_ROOT}/bundlesdf/mycuda && rm -rf build *egg* *.so && export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}} && python3 -m pip install -e . --no-build-isolation
 
