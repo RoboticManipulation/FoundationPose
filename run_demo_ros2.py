@@ -17,12 +17,29 @@ from sensor_msgs.msg import CameraInfo
 from cv_bridge import CvBridge
 import message_filters
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-import pyrealsense2 as rs
+# import pyrealsense2 as rs
 
 # TF2 imports for publishing pose as transform
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
 from scipy.spatial.transform import Rotation as R
+
+
+def _to_scalar(x) -> float:
+    """Convert various types (torch.Tensor, numpy array) to a scalar float."""
+    try:
+        if isinstance(x, torch.Tensor):
+            return x.detach().float().cpu().view(-1)[0].item()
+    except Exception:
+        pass
+    try:
+        arr = np.asarray(x).reshape(-1)
+        if arr.size:
+            return float(arr[0])
+    except Exception:
+        pass
+    return None
+
 
 class FoundationPoseROS2(Node):
     def __init__(self, args):
@@ -30,7 +47,8 @@ class FoundationPoseROS2(Node):
         
         self.args = args
         self.bridge = CvBridge()
-        
+        self.score_threshold = args.score_threshold
+
         # Setup debug directory
         self.debug_dir = args.debug_dir
         os.makedirs(self.debug_dir, exist_ok=True)
@@ -46,6 +64,7 @@ class FoundationPoseROS2(Node):
         self.est = None
         self.to_origin = None
         self.bbox = None
+        self.score_logit = None
         
         # Threading lock for pose updates
         self.lock = threading.Lock()
@@ -140,6 +159,7 @@ class FoundationPoseROS2(Node):
         
         self.get_logger().info("FoundationPose ROS2 node initialized")
         self.get_logger().info(f"Publishing TF: {self.camera_frame} -> {self.object_frame}")
+        self.get_logger().info(f"Score threshold for auto-reset: {self.score_threshold:.2f}")
         self.get_logger().info("Waiting for camera intrinsics...")
         self.get_logger().info("Press 'q' to quit, 's' to save current frame, 'r' to reset tracking")
     
@@ -313,8 +333,15 @@ class FoundationPoseROS2(Node):
                 if self.pose is None:
                     self.get_logger().warn("Failed to estimate initial pose, skipping frame")
                     return
-                    
+
                 self.get_logger().info("Initial pose registration successful!")
+
+                # Extract score from initial pose estimation
+                try:
+                    if hasattr(self.est, 'scores') and self.est.scores is not None:
+                        self.score_logit = _to_scalar(self.est.scores[0])
+                except Exception as e:
+                    self.get_logger().info(f"Failed to read init score: {e}")
             else:
                 # Track with refiner
                 try:
@@ -323,15 +350,58 @@ class FoundationPoseROS2(Node):
                     self.get_logger().warn(f"Tracking failed: {e}, resetting pose...")
                     self.pose = None
                     return
+
+                # Compute score for tracking frame
+                try:
+                    cur_pose_centered = getattr(self.est, 'pose_last', None)
+                    if cur_pose_centered is not None:
+                        scores, _ = self.est.scorer.predict(
+                            mesh=self.est.mesh,
+                            rgb=color,
+                            depth=depth,
+                            K=K_scaled,
+                            ob_in_cams=cur_pose_centered.data.cpu().numpy().reshape(1, 4, 4),
+                            normal_map=None,
+                            mesh_tensors=self.est.mesh_tensors,
+                            glctx=self.est.glctx,
+                            mesh_diameter=self.est.diameter,
+                            get_vis=False,
+                        )
+                        self.score_logit = _to_scalar(scores)
+                except Exception as e:
+                    self.get_logger().info(f"Failed to compute score on track frame: {e}")
+
+                # Check if score is above threshold and reset tracking if needed
+                if self.score_logit is not None and self.score_logit > self.score_threshold:
+                    self.get_logger().warn(f"Score {self.score_logit:.2f} above threshold {self.score_threshold:.2f}, resetting tracking...")
+                    self.pose = None
+                    self.score_logit = None
+                    return
             
             # Visualize
             center_pose = self.pose @ np.linalg.inv(self.to_origin)
             vis = draw_posed_3d_box(K_scaled, img=color, ob_in_cam=center_pose, bbox=self.bbox)
             vis = draw_xyz_axis(vis, ob_in_cam=center_pose, scale=0.1, K=K_scaled, thickness=3, transparency=0, is_input_rgb=True)
-            
+
+            # Display score if available
+            if self.score_logit is not None:
+                try:
+                    cv2.putText(
+                        vis,
+                        f"score_logit: {self.score_logit:.2f}",
+                        (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.9,
+                        (0, 255, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
+                except Exception:
+                    pass
+
             # Publish pose as TF2 transform
             self.publish_pose_tf(center_pose, color_msg.header.stamp)
-            
+
             cv2.imshow('FoundationPose Tracking (ROS2)', vis)
             
             key = cv2.waitKey(1) & 0xFF
@@ -357,6 +427,7 @@ def main(args=None):
     parser.add_argument('--downscale', type=float, default=1.0, help="Downscale factor for images (e.g., 0.5 = half resolution, saves GPU memory)")
     parser.add_argument('--camera_frame', type=str, default='camera_color_optical_frame', help="TF2 parent frame (camera frame)")
     parser.add_argument('--object_frame', type=str, default='foundationpose_object', help="TF2 child frame (object frame)")
+    parser.add_argument('--score_threshold', type=float, default=40.0, help="Maximum score threshold - reset tracking if score exceeds this value")
     
     # Parse known args to allow ROS2 args to pass through
     parsed_args, _ = parser.parse_known_args()

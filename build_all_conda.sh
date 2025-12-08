@@ -3,14 +3,22 @@
 PROJ_ROOT=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 # Install dependencies
-pip install torchvision==0.16.0+cu121 torchaudio==2.1.0 torch==2.1.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+# Using PyTorch with CUDA 12.4 for compatibility with CUDA 12.8
+pip install torch==2.4.0+cu124 torchvision==0.19.0+cu124 torchaudio==2.4.0+cu124 --index-url https://download.pytorch.org/whl/cu124
 pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable" --no-build-isolation
 python -m pip install -r requirements.txt
 
 # Clone source repository of FoundationPose
 # git clone https://github.com/NVlabs/FoundationPose.git
 
-pip install gdown
+# pip install gdown
+
+git clone https://github.com/wkentaro/gdown
+sed -i 's/MAX_NUMBER_FILES = 50/MAX_NUMBER_FILES = 1000/' gdown/gdown/download_folder.py
+cd gdown && pip install -e . --no-cache-dir
+
+cd ..
+
 pip install ruamel.yaml
 
 # git clone https://github.com/RoboticManipulation/FoundationPose.git
@@ -50,18 +58,25 @@ cd ${PROJ_ROOT} && wget https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-
     sudo make install
 
 # Clone and install nvdiffrast
-cd ${PROJ_ROOT} && git clone https://github.com/NVlabs/nvdiffrast && \
-    cd /nvdiffrast && pip install .
+cd ${PROJ_ROOT} && git clone https://github.com/NVlabs/nvdiffrast 
+cd ${PROJ_ROOT}/nvdiffrast && pip install .
 
 # Install mycpp
 cd ${PROJ_ROOT}/mycpp/ && \
 rm -rf build && mkdir -p build && cd build && \
 cmake .. && \
-sudo make -j$(nproc)
+sudo make -j$(nproc-1)
 
 # Install mycuda
 cd ${PROJ_ROOT}/bundlesdf/mycuda && \
 rm -rf build *egg* *.so && \
-python3 -m pip install -e . --no-build-isolation
+python3 -m pip install -e . --no-build-
+
+
+## ERROR RESOLUTION for mycuda installation
+# source ~/miniconda3/bin/activate foundationpose_ros && pip uninstall torch torchvision torchaudio -y && pip cache purge
+# source ~/miniconda3/bin/activate foundationpose_ros && pip install torch==2.4.0+cu124 torchvision==0.19.0+cu124 torchaudio==2.4.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+# source ~/miniconda3/bin/activate foundationpose_ros && python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA: {torch.version.cuda}')"
+# ource ~/miniconda3/bin/activate foundationpose_ros && cd /home/${whoami}/ros2/object_placement/FoundationPose/bundlesdf/mycuda && rm -rf build *egg* *.so && export PATH=/usr/local/cuda-12.8/bin${PATH:+:${PATH}} && python3 -m pip install -e . --no-build-isolation
 
 cd ${PROJ_ROOT}
