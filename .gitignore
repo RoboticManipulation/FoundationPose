@@ -165,3 +165,10 @@ gdown/
 nvdiffrast/
 pybind11/
 eigen-3.4.0/
+model_free_dataset/
+
+
+ros2_bridge_ws/build/
+ros2_bridge_ws/install/
+ros2_bridge_ws/log/
+ros2_bridge_ws/*.md

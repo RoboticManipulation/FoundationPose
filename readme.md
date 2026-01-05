@@ -1,3 +1,6 @@
+
+
+
 # FoundationPose: Unified 6D Pose Estimation and Tracking of Novel Objects
 
 ## Running the docker setup on RTX 4080 Super with Ubuntu 24.04 & CUDA 12.8 
