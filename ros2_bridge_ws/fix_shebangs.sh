@@ -2,7 +2,7 @@
 # Automatically fix Python shebangs to use conda environment after colcon build
 
 CONDA_ENV="foundationpose_ros"
-CONDA_PYTHON="/home/ehsanullahm1/miniconda3/envs/${CONDA_ENV}/bin/python3"
+CONDA_PYTHON="/home/demo/miniconda3/envs/${CONDA_ENV}/bin/python3"
 INSTALL_DIR="$(pwd)/install/foundationpose_bridge/lib/foundationpose_bridge"
 
 echo "Fixing shebangs to use: $CONDA_PYTHON"

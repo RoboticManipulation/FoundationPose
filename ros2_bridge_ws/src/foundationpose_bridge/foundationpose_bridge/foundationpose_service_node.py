@@ -11,7 +11,7 @@ import tempfile
 
 # Add FoundationPose to path
 # Use absolute path since relative path differs between source and install
-foundationpose_root = '/home/ehsanullahm1/ros2/object_placement/FoundationPose'
+foundationpose_root = '/home/demo/ros2/object_placement/FoundationPose'
 if os.path.exists(foundationpose_root):
     sys.path.insert(0, foundationpose_root)
 else:
