@@ -114,6 +114,9 @@ class FoundationPoseServiceNode(Node):
 
         # TF2 broadcaster for publishing pose
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+        
+        # Publisher for visualization image
+        self.vis_pub = self.create_publisher(ROSImage, '/FP_result', 10)
 
         # Create service
         self.srv = self.create_service(
@@ -124,7 +127,7 @@ class FoundationPoseServiceNode(Node):
 
         # QoS profile to match publisher
         qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
@@ -376,13 +379,13 @@ class FoundationPoseServiceNode(Node):
                 # Initial pose estimation
                 mask = np.ones(color.shape[:2], dtype=np.uint8) * 255
 
-                # Check valid depth
-                valid_depth_in_mask = np.sum((depth > 0.1) & (depth < 3.0) & (mask > 0))
-                self.get_logger().info(f"Valid depth points in mask: {valid_depth_in_mask}")
+                # # Check valid depth
+                # valid_depth_in_mask = np.sum((depth > 0.1) & (depth < 3.0) & (mask > 0))
+                # self.get_logger().info(f"Valid depth points in mask: {valid_depth_in_mask}")
 
-                if valid_depth_in_mask < 1000:
-                    self.get_logger().warn(f"Not enough valid depth points ({valid_depth_in_mask}), skipping frame")
-                    return
+                # if valid_depth_in_mask < 1000:
+                #     self.get_logger().warn(f"Not enough valid depth points ({valid_depth_in_mask}), skipping frame")
+                #     return
 
                 self.get_logger().info("Running initial pose estimation...")
                 try:
@@ -467,19 +470,15 @@ class FoundationPoseServiceNode(Node):
 
             # Visualization (optional)
             if self.enable_visualization:
-                cv2.imshow('FoundationPose Service Node', vis)
 
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    self.get_logger().info("Quit requested")
-                    rclpy.shutdown()
-                elif key == ord('r'):
-                    self.get_logger().info("Resetting tracking...")
-                    self.pose = None
-                elif key == ord('s'):
-                    save_path = f"{self.debug_dir}/frame_{self.frame_count:04d}.png"
-                    cv2.imwrite(save_path, vis)
-                    self.get_logger().info(f"Saved frame to {save_path}")
+                try:
+                    vis_msg = self.bridge.cv2_to_imgmsg(vis, encoding='bgr8')
+                    vis_msg.header.stamp = color_msg.header.stamp
+                    vis_msg.header.frame_id = self.camera_frame
+                    self.vis_pub.publish(vis_msg)
+                except Exception as e:
+                    self.get_logger().error(f"Failed to publish visualization: {e}")
+
 
             self.frame_count += 1
 
@@ -494,8 +493,8 @@ def main(args=None):
     except KeyboardInterrupt:
         node.get_logger().info("Keyboard interrupt, shutting down")
     finally:
-        if node.enable_visualization:
-            cv2.destroyAllWindows()
+        # if node.enable_visualization:
+        #     cv2.destroyAllWindows()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

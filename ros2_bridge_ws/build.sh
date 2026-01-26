@@ -22,3 +22,7 @@ else
     echo "Build failed!"
     exit 1
 fi
+
+
+
+# pip install empy==3.3.4 catkin_pkg lark pyparsing setuptools

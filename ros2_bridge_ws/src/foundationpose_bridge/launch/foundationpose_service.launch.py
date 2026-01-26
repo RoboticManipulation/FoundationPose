@@ -18,12 +18,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'downscale',
-            default_value='0.5',
+            default_value='1.0',
             description='Downscale factor for images'
         ),
         DeclareLaunchArgument(
             'camera_frame',
-            default_value='camera_color_optical_frame',
+            default_value='gemini336_color_optical_frame',
             description='TF2 parent frame (camera frame)'
         ),
         DeclareLaunchArgument(
@@ -38,19 +38,47 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'color_topic',
-            default_value='/sim_camera_rgb',
+            # default_value='/sim_camera_rgb',
+            # default_value='/camera/camera/color/image_rect_raw',
+            default_value='/gemini336/color/image_raw',
             description='Color image topic'
         ),
         DeclareLaunchArgument(
             'depth_topic',
-            default_value='/sim_camera_depth',
+            # default_value='/sim_camera_depth',
+            # default_value='/camera/camera/aligned_depth_to_color/image_raw',
+            default_value='/gemini336/depth/image_raw',
             description='Depth image topic'
         ),
         DeclareLaunchArgument(
             'camera_info_topic',
-            default_value='/sim_camera_info',
+            # default_value='/sim_camera_info',
+            # default_value= '/camera/camera/color/camera_info',
+            default_value='/gemini336/color/camera_info',
             description='Camera info topic'
         ),
+        
+        # Subscribe to camera info to get intrinsics
+        # self.camera_info_sub = self.create_subscription(
+        #     CameraInfo,
+        #     '/camera/camera/color/camera_info',
+        #     self.camera_info_callback,
+        #     10
+        # )
+        
+        # # Synchronized subscribers for color and depth images (RealSense)
+        # self.color_sub = message_filters.Subscriber(
+        #     self,
+        #     ROSImage,
+        #     '/camera/camera/color/image_rect_raw',
+        #     qos_profile=qos
+        # )
+        # self.depth_sub = message_filters.Subscriber(
+        #     self,
+        #     ROSImage,
+        #     '/camera/camera/aligned_depth_to_color/image_raw',
+        #     qos_profile=qos
+        # )
         DeclareLaunchArgument(
             'enable_visualization',
             default_value='true',
