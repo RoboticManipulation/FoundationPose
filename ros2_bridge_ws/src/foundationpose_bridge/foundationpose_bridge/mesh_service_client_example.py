@@ -23,7 +23,21 @@ class MeshServiceClient(Node):
         while not self.client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for service "load_mesh" to become available...')
 
-    def load_mesh_and_enable_tracking(self, mesh_file_path):
+    def log_pose_response(self, response):
+        """Print one-shot pose output when the service returns one."""
+        if not response.pose_valid:
+            return
+
+        pose = response.pose.transform
+        self.get_logger().info(
+            'One-shot pose received: '
+            f'frame={response.pose.header.frame_id}, child={response.pose.child_frame_id}, '
+            f'translation=({pose.translation.x:.4f}, {pose.translation.y:.4f}, {pose.translation.z:.4f}), '
+            f'rotation=({pose.rotation.x:.4f}, {pose.rotation.y:.4f}, '
+            f'{pose.rotation.z:.4f}, {pose.rotation.w:.4f})'
+        )
+
+    def load_mesh_and_enable_tracking(self, mesh_file_path, result_mode='both'):
         """Load a mesh file and enable tracking"""
         self.get_logger().info(f'Loading mesh from {mesh_file_path}...')
 
@@ -41,8 +55,12 @@ class MeshServiceClient(Node):
         request.data = list(mesh_data)  # Convert bytes to list of uint8
         request.size_bytes = len(mesh_data)
         request.enable_tracking = True
+        request.result_mode = result_mode
 
-        self.get_logger().info(f'Sending request: {request.filename} ({request.size_bytes} bytes), enable_tracking=True')
+        self.get_logger().info(
+            f'Sending request: {request.filename} ({request.size_bytes} bytes), '
+            f'enable_tracking=True, result_mode={result_mode}'
+        )
 
         # Call service
         future = self.client.call_async(request)
@@ -52,6 +70,7 @@ class MeshServiceClient(Node):
             response = future.result()
             if response.success:
                 self.get_logger().info(f'Success: {response.message}')
+                self.log_pose_response(response)
                 return True
             else:
                 self.get_logger().error(f'Failed: {response.message}')
@@ -70,6 +89,7 @@ class MeshServiceClient(Node):
         request.data = []
         request.size_bytes = 0
         request.enable_tracking = False
+        request.result_mode = ''
 
         # Call service
         future = self.client.call_async(request)
@@ -93,8 +113,9 @@ def main(args=None):
 
     if len(sys.argv) < 2:
         print("Usage:")
-        print("  Enable tracking:  ros2 run foundationpose_bridge mesh_service_client_example <mesh_file_path>")
+        print("  Enable tracking:  ros2 run foundationpose_bridge mesh_service_client_example <mesh_file_path> [result_mode]")
         print("  Disable tracking: ros2 run foundationpose_bridge mesh_service_client_example disable")
+        print("  result_mode: continuous_tf | service_response_once | both (default: both)")
         sys.exit(1)
 
     client = MeshServiceClient()
@@ -105,7 +126,8 @@ def main(args=None):
     else:
         # Load mesh and enable tracking
         mesh_file_path = sys.argv[1]
-        client.load_mesh_and_enable_tracking(mesh_file_path)
+        result_mode = sys.argv[2] if len(sys.argv) > 2 else 'both'
+        client.load_mesh_and_enable_tracking(mesh_file_path, result_mode=result_mode)
 
     client.destroy_node()
     rclpy.shutdown()

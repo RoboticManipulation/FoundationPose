@@ -3,9 +3,12 @@
 string filename        # Name of the mesh file (e.g., "mesh_000.obj")
 uint8[] data          # Raw mesh file data (binary)
 uint64 size_bytes     # Size of the mesh data in bytes
-bool enable_tracking  # Flag: true = start TF publishing, false = stop TF publishing
+bool enable_tracking  # Flag: true = start pose estimation, false = stop
+string result_mode    # Pose output mode: continuous_tf, service_response_once, or both (empty = server default)
 
 ---
 # Response
 bool success          # True if mesh loaded and tracking state changed successfully
 string message        # Status message or error description
+bool pose_valid       # True when pose contains a one-shot estimate
+geometry_msgs/TransformStamped pose  # Estimated object pose in the camera frame

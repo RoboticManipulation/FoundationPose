@@ -84,6 +84,11 @@ def generate_launch_description():
             default_value='true',
             description='Enable/disable OpenCV visualization window'
         ),
+        DeclareLaunchArgument(
+            'default_result_mode',
+            default_value='continuous_tf',
+            description='Fallback result_mode when load_mesh request.result_mode is empty'
+        ),
 
         Node(
             package='foundationpose_bridge',
@@ -101,6 +106,7 @@ def generate_launch_description():
                 'depth_topic': LaunchConfiguration('depth_topic'),
                 'camera_info_topic': LaunchConfiguration('camera_info_topic'),
                 'enable_visualization': LaunchConfiguration('enable_visualization'),
+                'default_result_mode': LaunchConfiguration('default_result_mode'),
             }]
         ),
     ])

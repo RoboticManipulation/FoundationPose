@@ -42,6 +42,16 @@ from scipy.spatial.transform import Rotation as R
 from foundationpose_msgs.srv import LoadMesh
 
 
+RESULT_MODE_CONTINUOUS_TF = 'continuous_tf'
+RESULT_MODE_SERVICE_RESPONSE_ONCE = 'service_response_once'
+RESULT_MODE_BOTH = 'both'
+VALID_RESULT_MODES = {
+    RESULT_MODE_CONTINUOUS_TF,
+    RESULT_MODE_SERVICE_RESPONSE_ONCE,
+    RESULT_MODE_BOTH,
+}
+
+
 def _to_scalar(x) -> float:
     """Convert various types (torch.Tensor, numpy array) to a scalar float."""
     try:
@@ -73,6 +83,7 @@ class FoundationPoseServiceNode(Node):
         self.declare_parameter('depth_topic', '/sim_camera_depth')
         self.declare_parameter('camera_info_topic', '/sim_camera_info')
         self.declare_parameter('enable_visualization', True)
+        self.declare_parameter('default_result_mode', RESULT_MODE_CONTINUOUS_TF)
 
         # Get parameters
         self.debug = self.get_parameter('debug').value
@@ -85,6 +96,10 @@ class FoundationPoseServiceNode(Node):
         self.depth_topic = self.get_parameter('depth_topic').value
         self.camera_info_topic = self.get_parameter('camera_info_topic').value
         self.enable_visualization = self.get_parameter('enable_visualization').value
+        self.default_result_mode = self._normalize_result_mode(
+            self.get_parameter('default_result_mode').value,
+            RESULT_MODE_CONTINUOUS_TF,
+        )
 
         self.bridge = CvBridge()
 
@@ -105,6 +120,8 @@ class FoundationPoseServiceNode(Node):
         self.score_logit = None
         self.mesh = None
         self.mesh_file_path = None
+        self.input_format_logged = False
+        self.latest_frame = None
 
         # Control flag
         self.tracking_enabled = False
@@ -114,22 +131,22 @@ class FoundationPoseServiceNode(Node):
 
         # TF2 broadcaster for publishing pose
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
-        
+
+        # Match camera / RViz image display defaults (RELIABLE breaks RViz Best Effort subs)
+        image_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+
         # Publisher for visualization image
-        self.vis_pub = self.create_publisher(ROSImage, '/FP_result', 10)
+        self.vis_pub = self.create_publisher(ROSImage, '/FP_result', image_qos)
 
         # Create service
         self.srv = self.create_service(
             LoadMesh,
             'load_mesh',
             self.load_mesh_callback
-        )
-
-        # QoS profile to match publisher
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
         )
 
         # Subscribe to camera info to get intrinsics
@@ -145,13 +162,13 @@ class FoundationPoseServiceNode(Node):
             self,
             ROSImage,
             self.color_topic,
-            qos_profile=qos
+            qos_profile=image_qos
         )
         self.depth_sub = message_filters.Subscriber(
             self,
             ROSImage,
             self.depth_topic,
-            qos_profile=qos
+            qos_profile=image_qos
         )
 
         # Time synchronizer for color and depth
@@ -165,86 +182,143 @@ class FoundationPoseServiceNode(Node):
         self.get_logger().info("FoundationPose Service Node initialized")
         self.get_logger().info(f"Service 'load_mesh' is ready")
         self.get_logger().info(f"TF publishing: {self.camera_frame} -> {self.object_frame}")
+        self.get_logger().info(f"Default result mode (when request.result_mode is empty): {self.default_result_mode}")
         self.get_logger().info(f"Score threshold: {self.score_threshold:.2f}")
         self.get_logger().info(f"Visualization: {'enabled' if self.enable_visualization else 'disabled'}")
         if self.enable_visualization:
             self.get_logger().info("Press 'q' to quit, 's' to save current frame, 'r' to reset tracking")
         self.get_logger().info("Waiting for camera intrinsics and mesh data...")
 
+    def _normalize_result_mode(self, value, fallback):
+        mode = str(value).strip().lower() if value else fallback
+        if mode not in VALID_RESULT_MODES:
+            self.get_logger().warn(
+                f"Invalid result_mode '{value}', falling back to '{fallback}'. "
+                f"Valid values: {sorted(VALID_RESULT_MODES)}"
+            )
+            return fallback
+        return mode
+
+    def _resolve_result_mode(self, request):
+        requested = getattr(request, 'result_mode', '') or ''
+        if requested.strip():
+            return self._normalize_result_mode(requested, self.default_result_mode)
+        return self.default_result_mode
+
+    def _publishes_continuous_tf(self, result_mode):
+        return result_mode in (RESULT_MODE_CONTINUOUS_TF, RESULT_MODE_BOTH)
+
+    def _returns_pose_in_response(self, result_mode):
+        return result_mode in (RESULT_MODE_SERVICE_RESPONSE_ONCE, RESULT_MODE_BOTH)
+
+    def _reset_pose_state(self):
+        self.pose = None
+        self.frame_count = 0
+        self.score_logit = None
+
+    def _load_mesh_from_request(self, request, response):
+        if len(request.data) == 0:
+            response.success = False
+            response.message = "Mesh data is required when enable_tracking=true"
+            return False
+
+        if request.size_bytes != len(request.data):
+            self.get_logger().warn(
+                f"Size mismatch: expected {request.size_bytes}, got {len(request.data)}"
+            )
+
+        temp_dir = tempfile.mkdtemp(prefix='foundationpose_mesh_')
+        self.mesh_file_path = os.path.join(temp_dir, request.filename)
+
+        with open(self.mesh_file_path, 'wb') as f:
+            f.write(bytes(request.data))
+
+        self.get_logger().info(f"Saved mesh to {self.mesh_file_path} ({len(request.data)} bytes)")
+
+        try:
+            self.mesh = trimesh.load(self.mesh_file_path)
+            self.get_logger().info(f"Loaded mesh: {len(self.mesh.vertices)} vertices")
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to load mesh: {str(e)}"
+            return False
+
+        self.to_origin, extents = trimesh.bounds.oriented_bounds(self.mesh)
+        self.bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2, 3)
+        return True
+
+    def _initialize_foundationpose(self):
+        self.get_logger().info("Initializing FoundationPose estimator...")
+        scorer = ScorePredictor()
+        refiner = PoseRefinePredictor()
+        glctx = dr.RasterizeCudaContext()
+
+        self.est = FoundationPose(
+            model_pts=self.mesh.vertices,
+            model_normals=self.mesh.vertex_normals,
+            mesh=self.mesh,
+            scorer=scorer,
+            refiner=refiner,
+            debug_dir=self.debug_dir,
+            debug=self.debug,
+            glctx=glctx
+        )
+
     def load_mesh_callback(self, request, response):
         """Handle mesh loading service request"""
-        self.get_logger().info(f"Received mesh service request: enable_tracking={request.enable_tracking}")
+        result_mode = self._resolve_result_mode(request)
+        self.get_logger().info(
+            f"Received mesh service request: enable_tracking={request.enable_tracking}, "
+            f"result_mode={result_mode}"
+        )
+        response.pose_valid = False
 
         try:
             with self.lock:
                 if request.enable_tracking:
-                    # Enable tracking - mesh is required
-                    if len(request.data) == 0:
-                        response.success = False
-                        response.message = "Mesh data is required when enable_tracking=true"
+                    if not self._load_mesh_from_request(request, response):
                         return response
 
-                    # Verify size
-                    if request.size_bytes != len(request.data):
-                        self.get_logger().warn(
-                            f"Size mismatch: expected {request.size_bytes}, got {len(request.data)}"
-                        )
+                    self._initialize_foundationpose()
+                    self._reset_pose_state()
 
-                    # Save mesh data to temporary file
-                    temp_dir = tempfile.mkdtemp(prefix='foundationpose_mesh_')
-                    self.mesh_file_path = os.path.join(temp_dir, request.filename)
+                    pose_matrix = None
+                    if self._returns_pose_in_response(result_mode):
+                        if self.latest_frame is None:
+                            response.success = False
+                            response.message = (
+                                "No synchronized RGB-D frame is cached yet; wait for camera topics before requesting "
+                                "service_response_once or both"
+                            )
+                            return response
 
-                    with open(self.mesh_file_path, 'wb') as f:
-                        f.write(bytes(request.data))
+                        pose_matrix = self._estimate_pose_from_frame(self.latest_frame, allow_tracking=False)
+                        if pose_matrix is None:
+                            response.success = False
+                            response.message = "Mesh loaded but one-shot pose estimation failed"
+                            return response
 
-                    self.get_logger().info(f"Saved mesh to {self.mesh_file_path} ({len(request.data)} bytes)")
+                        response.pose = self.pose_matrix_to_transform(pose_matrix, self.latest_frame['stamp'])
+                        response.pose_valid = True
+                        if self._publishes_continuous_tf(result_mode):
+                            self.publish_pose_tf(pose_matrix, self.latest_frame['stamp'])
+                        if self.enable_visualization:
+                            self.publish_visualization(pose_matrix, self.latest_frame)
 
-                    # Load mesh
-                    try:
-                        self.mesh = trimesh.load(self.mesh_file_path)
-                        self.get_logger().info(f"Loaded mesh: {len(self.mesh.vertices)} vertices")
-                    except Exception as e:
-                        response.success = False
-                        response.message = f"Failed to load mesh: {str(e)}"
-                        return response
-
-                    # Compute oriented bounding box
-                    self.to_origin, extents = trimesh.bounds.oriented_bounds(self.mesh)
-                    self.bbox = np.stack([-extents/2, extents/2], axis=0).reshape(2, 3)
-
-                    # Initialize FoundationPose
-                    self.get_logger().info("Initializing FoundationPose estimator...")
-                    scorer = ScorePredictor()
-                    refiner = PoseRefinePredictor()
-                    glctx = dr.RasterizeCudaContext()
-
-                    self.est = FoundationPose(
-                        model_pts=self.mesh.vertices,
-                        model_normals=self.mesh.vertex_normals,
-                        mesh=self.mesh,
-                        scorer=scorer,
-                        refiner=refiner,
-                        debug_dir=self.debug_dir,
-                        debug=self.debug,
-                        glctx=glctx
-                    )
-
-                    # Reset pose estimation
-                    self.pose = None
-                    self.frame_count = 0
-                    self.score_logit = None
-
-                    # Enable tracking
-                    self.tracking_enabled = True
-
+                    self.tracking_enabled = self._publishes_continuous_tf(result_mode)
                     response.success = True
-                    response.message = f"Mesh loaded and tracking enabled: {request.filename}"
+                    if self._returns_pose_in_response(result_mode) and self._publishes_continuous_tf(result_mode):
+                        response.message = f"Mesh loaded, one-shot pose returned, and tracking enabled: {request.filename}"
+                    elif self._returns_pose_in_response(result_mode):
+                        response.message = f"Mesh loaded and one-shot pose returned: {request.filename}"
+                    else:
+                        response.message = f"Mesh loaded and tracking enabled: {request.filename}"
                     self.get_logger().info(response.message)
 
                 else:
                     # Disable tracking
                     self.tracking_enabled = False
-                    self.pose = None
+                    self._reset_pose_state()
 
                     response.success = True
                     response.message = "Tracking disabled"
@@ -270,13 +344,8 @@ class FoundationPoseServiceNode(Node):
             self.intrinsics_received = True
             self.get_logger().info(f"Camera intrinsics received")
 
-    def publish_pose_tf(self, pose_matrix, timestamp):
-        """Publish the pose as a TF2 transform
-
-        Args:
-            pose_matrix: 4x4 transformation matrix (object in camera frame)
-            timestamp: ROS2 timestamp from the image message
-        """
+    def pose_matrix_to_transform(self, pose_matrix, timestamp):
+        """Convert a 4x4 object-in-camera pose matrix to a TF message."""
         t = TransformStamped()
         t.header.stamp = timestamp
         t.header.frame_id = self.camera_frame
@@ -296,22 +365,20 @@ class FoundationPoseServiceNode(Node):
         t.transform.rotation.z = float(quat[2])
         t.transform.rotation.w = float(quat[3])
 
+        return t
+
+    def publish_pose_tf(self, pose_matrix, timestamp):
+        """Publish the pose as a TF2 transform."""
+        t = self.pose_matrix_to_transform(pose_matrix, timestamp)
+
         # Broadcast the transform
         self.tf_broadcaster.sendTransform(t)
 
-    def image_callback(self, color_msg, depth_msg):
-        """Process synchronized color and depth images"""
-        # Skip if tracking is not enabled
-        if not self.tracking_enabled:
-            return
-
+    def prepare_frame(self, color_msg, depth_msg):
+        """Convert synchronized ROS image messages into FoundationPose inputs."""
         if not self.intrinsics_received:
             self.get_logger().warn("Camera intrinsics not yet received, skipping frame", throttle_duration_sec=5.0)
-            return
-
-        if self.est is None:
-            self.get_logger().warn("FoundationPose estimator not initialized, skipping frame", throttle_duration_sec=5.0)
-            return
+            return None
 
         try:
             # Convert ROS Image messages to OpenCV/numpy format
@@ -351,6 +418,16 @@ class FoundationPoseServiceNode(Node):
             # Handle invalid depth values
             depth = np.where(np.isinf(depth) | np.isnan(depth), 0.0, depth)
 
+            # Align depth to color resolution (required when camera streams differ in size)
+            color_h, color_w = color.shape[:2]
+            depth_h, depth_w = depth.shape[:2]
+            if (depth_h, depth_w) != (color_h, color_w):
+                if not self.input_format_logged:
+                    self.get_logger().warn(
+                        f"Depth {depth_w}x{depth_h} != color {color_w}x{color_h}, resizing depth to match color"
+                    )
+                depth = cv2.resize(depth, (color_w, color_h), interpolation=cv2.INTER_NEAREST)
+
             # Downscale images if requested
             scale = self.downscale
             K_scaled = self.K.copy()
@@ -364,122 +441,152 @@ class FoundationPoseServiceNode(Node):
                 K_scaled[1, 2] *= scale  # cy
 
             # Debug: Log once to verify formats
-            if self.frame_count == 0:
+            if not self.input_format_logged:
                 self.get_logger().info(f"Color shape: {color.shape}, dtype: {color.dtype}")
                 self.get_logger().info(f"Depth shape: {depth.shape}, dtype: {depth.dtype}")
                 self.get_logger().info(f"Depth range: min={depth.min():.3f}m, max={depth.max():.3f}m")
+                self.input_format_logged = True
 
         except Exception as e:
             self.get_logger().error(f"Failed to convert images: {e}")
+            return None
+
+        return {
+            'color': color,
+            'depth': depth,
+            'K': K_scaled,
+            'stamp': color_msg.header.stamp,
+        }
+
+    def _estimate_pose_from_frame(self, frame, allow_tracking):
+        color = frame['color']
+        depth = frame['depth']
+        K_scaled = frame['K']
+
+        # Pose estimation
+        if self.pose is None or not allow_tracking:
+            # Initial pose estimation
+            mask = np.ones(color.shape[:2], dtype=np.uint8) * 255
+
+            # # Check valid depth
+            # valid_depth_in_mask = np.sum((depth > 0.1) & (depth < 3.0) & (mask > 0))
+            # self.get_logger().info(f"Valid depth points in mask: {valid_depth_in_mask}")
+
+            # if valid_depth_in_mask < 1000:
+            #     self.get_logger().warn(f"Not enough valid depth points ({valid_depth_in_mask}), skipping frame")
+            #     return None
+
+            self.get_logger().info("Running initial pose estimation...")
+            try:
+                torch.cuda.empty_cache()
+                self.pose = self.est.register(K=K_scaled, rgb=color, depth=depth, ob_mask=mask, iteration=3)
+            except Exception as e:
+                self.get_logger().error(f"Registration failed: {e}")
+                torch.cuda.empty_cache()
+                self.pose = None
+
+            if self.pose is None:
+                self.get_logger().warn("Failed to estimate initial pose, skipping frame")
+                return None
+
+            self.get_logger().info("Initial pose registration successful!")
+
+            # Extract score
+            try:
+                if hasattr(self.est, 'scores') and self.est.scores is not None:
+                    self.score_logit = _to_scalar(self.est.scores[0])
+            except Exception as e:
+                self.get_logger().info(f"Failed to read init score: {e}")
+        else:
+            # Track with refiner
+            try:
+                self.pose = self.est.track_one(rgb=color, depth=depth, K=K_scaled, iteration=2)
+            except RuntimeError as e:
+                self.get_logger().warn(f"Tracking failed: {e}, resetting pose...")
+                self.pose = None
+                return None
+
+            # Compute score for tracking frame
+            try:
+                cur_pose_centered = getattr(self.est, 'pose_last', None)
+                if cur_pose_centered is not None:
+                    scores, _ = self.est.scorer.predict(
+                        mesh=self.est.mesh,
+                        rgb=color,
+                        depth=depth,
+                        K=K_scaled,
+                        ob_in_cams=cur_pose_centered.data.cpu().numpy().reshape(1, 4, 4),
+                        normal_map=None,
+                        mesh_tensors=self.est.mesh_tensors,
+                        glctx=self.est.glctx,
+                        mesh_diameter=self.est.diameter,
+                        get_vis=False,
+                    )
+                    self.score_logit = _to_scalar(scores)
+            except Exception as e:
+                self.get_logger().info(f"Failed to compute score on track frame: {e}")
+
+            # Check score threshold
+            if self.score_logit is not None and self.score_logit > self.score_threshold:
+                self.get_logger().warn(f"Score {self.score_logit:.2f} above threshold, resetting tracking...")
+                self.pose = None
+                self.score_logit = None
+                return None
+
+        return self.pose @ np.linalg.inv(self.to_origin)
+
+    def publish_visualization(self, pose_matrix, frame):
+        color = frame['color']
+        K_scaled = frame['K']
+        vis = draw_posed_3d_box(K_scaled, img=color, ob_in_cam=pose_matrix, bbox=self.bbox)
+        vis = draw_xyz_axis(vis, ob_in_cam=pose_matrix, scale=0.1, K=K_scaled, thickness=3, transparency=0, is_input_rgb=True)
+
+        # Display score
+        if self.score_logit is not None:
+            try:
+                cv2.putText(
+                    vis,
+                    f"score_logit: {self.score_logit:.2f}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.9,
+                    (0, 255, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+            except Exception:
+                pass
+
+        try:
+            vis_msg = self.bridge.cv2_to_imgmsg(vis, encoding='bgr8')
+            vis_msg.header.stamp = frame['stamp']
+            vis_msg.header.frame_id = self.camera_frame
+            self.vis_pub.publish(vis_msg)
+        except Exception as e:
+            self.get_logger().error(f"Failed to publish visualization: {e}")
+
+    def image_callback(self, color_msg, depth_msg):
+        """Process synchronized color and depth images."""
+        frame = self.prepare_frame(color_msg, depth_msg)
+        if frame is None:
             return
 
         with self.lock:
-            # Pose estimation
-            if self.pose is None:
-                # Initial pose estimation
-                mask = np.ones(color.shape[:2], dtype=np.uint8) * 255
+            self.latest_frame = frame
+            if not self.tracking_enabled:
+                return
 
-                # # Check valid depth
-                # valid_depth_in_mask = np.sum((depth > 0.1) & (depth < 3.0) & (mask > 0))
-                # self.get_logger().info(f"Valid depth points in mask: {valid_depth_in_mask}")
+            if self.est is None:
+                self.get_logger().warn("FoundationPose estimator not initialized, skipping frame", throttle_duration_sec=5.0)
+                return
 
-                # if valid_depth_in_mask < 1000:
-                #     self.get_logger().warn(f"Not enough valid depth points ({valid_depth_in_mask}), skipping frame")
-                #     return
+            pose_matrix = self._estimate_pose_from_frame(frame, allow_tracking=True)
+            if pose_matrix is None:
+                return
 
-                self.get_logger().info("Running initial pose estimation...")
-                try:
-                    torch.cuda.empty_cache()
-                    self.pose = self.est.register(K=K_scaled, rgb=color, depth=depth, ob_mask=mask, iteration=3)
-                except Exception as e:
-                    self.get_logger().error(f"Registration failed: {e}")
-                    torch.cuda.empty_cache()
-                    self.pose = None
-
-                if self.pose is None:
-                    self.get_logger().warn("Failed to estimate initial pose, skipping frame")
-                    return
-
-                self.get_logger().info("Initial pose registration successful!")
-
-                # Extract score
-                try:
-                    if hasattr(self.est, 'scores') and self.est.scores is not None:
-                        self.score_logit = _to_scalar(self.est.scores[0])
-                except Exception as e:
-                    self.get_logger().info(f"Failed to read init score: {e}")
-            else:
-                # Track with refiner
-                try:
-                    self.pose = self.est.track_one(rgb=color, depth=depth, K=K_scaled, iteration=2)
-                except RuntimeError as e:
-                    self.get_logger().warn(f"Tracking failed: {e}, resetting pose...")
-                    self.pose = None
-                    return
-
-                # Compute score for tracking frame
-                try:
-                    cur_pose_centered = getattr(self.est, 'pose_last', None)
-                    if cur_pose_centered is not None:
-                        scores, _ = self.est.scorer.predict(
-                            mesh=self.est.mesh,
-                            rgb=color,
-                            depth=depth,
-                            K=K_scaled,
-                            ob_in_cams=cur_pose_centered.data.cpu().numpy().reshape(1, 4, 4),
-                            normal_map=None,
-                            mesh_tensors=self.est.mesh_tensors,
-                            glctx=self.est.glctx,
-                            mesh_diameter=self.est.diameter,
-                            get_vis=False,
-                        )
-                        self.score_logit = _to_scalar(scores)
-                except Exception as e:
-                    self.get_logger().info(f"Failed to compute score on track frame: {e}")
-
-                # Check score threshold
-                if self.score_logit is not None and self.score_logit > self.score_threshold:
-                    self.get_logger().warn(f"Score {self.score_logit:.2f} above threshold, resetting tracking...")
-                    self.pose = None
-                    self.score_logit = None
-                    return
-
-            # Visualize
-            center_pose = self.pose @ np.linalg.inv(self.to_origin)
-            vis = draw_posed_3d_box(K_scaled, img=color, ob_in_cam=center_pose, bbox=self.bbox)
-            vis = draw_xyz_axis(vis, ob_in_cam=center_pose, scale=0.1, K=K_scaled, thickness=3, transparency=0, is_input_rgb=True)
-
-            # Display score
-            if self.score_logit is not None:
-                try:
-                    cv2.putText(
-                        vis,
-                        f"score_logit: {self.score_logit:.2f}",
-                        (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.9,
-                        (0, 255, 255),
-                        2,
-                        cv2.LINE_AA,
-                    )
-                except Exception:
-                    pass
-
-            # Publish pose as TF2 transform
-            self.publish_pose_tf(center_pose, color_msg.header.stamp)
-
-            # Visualization (optional)
+            self.publish_pose_tf(pose_matrix, frame['stamp'])
             if self.enable_visualization:
-
-                try:
-                    vis_msg = self.bridge.cv2_to_imgmsg(vis, encoding='bgr8')
-                    vis_msg.header.stamp = color_msg.header.stamp
-                    vis_msg.header.frame_id = self.camera_frame
-                    self.vis_pub.publish(vis_msg)
-                except Exception as e:
-                    self.get_logger().error(f"Failed to publish visualization: {e}")
-
-
+                self.publish_visualization(pose_matrix, frame)
             self.frame_count += 1
 
 
