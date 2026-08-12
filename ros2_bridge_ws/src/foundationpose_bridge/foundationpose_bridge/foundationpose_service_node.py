@@ -462,8 +462,10 @@ class FoundationPoseServiceNode(Node):
                 except Exception:
                     pass
 
-            # Publish pose as TF2 transform
-            self.publish_pose_tf(center_pose, color_msg.header.stamp)
+            # Publish the canonical mesh pose returned by FoundationPose.
+            # ``center_pose`` is the oriented-bounding-box frame used only for
+            # drawing; publishing it silently permutes/rotates object axes.
+            self.publish_pose_tf(self.pose, color_msg.header.stamp)
 
             # Visualization (optional)
             if self.enable_visualization:
