@@ -8,17 +8,30 @@ import torch
 import os
 import sys
 import tempfile
+from pathlib import Path
 
 # Add FoundationPose to path
-# Use absolute path since relative path differs between source and install
-foundationpose_root = '/home/demo/ros2/object_placement/FoundationPose'
-if os.path.exists(foundationpose_root):
-    sys.path.insert(0, foundationpose_root)
-else:
-    print(f"WARNING: FoundationPose root not found at {foundationpose_root}")
-    # Try relative path as fallback
-    foundationpose_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
-    sys.path.insert(0, foundationpose_root)
+def _resolve_foundationpose_root():
+    candidates = []
+    configured_root = os.environ.get('FOUNDATIONPOSE_ROOT')
+    if configured_root:
+        candidates.append(Path(configured_root).expanduser())
+
+    source_path = Path(__file__).resolve()
+    candidates.extend(source_path.parents)
+
+    for candidate in candidates:
+        if (candidate / 'estimater.py').is_file():
+            return candidate
+
+    raise RuntimeError(
+        "Could not locate the FoundationPose repository. Set "
+        "FOUNDATIONPOSE_ROOT to the directory containing estimater.py."
+    )
+
+
+foundationpose_root = _resolve_foundationpose_root()
+sys.path.insert(0, str(foundationpose_root))
 
 # Import FoundationPose modules
 from estimater import *
@@ -30,7 +43,6 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image as ROSImage
 from sensor_msgs.msg import CameraInfo
 from cv_bridge import CvBridge
-import message_filters
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 # TF2 imports for publishing pose as transform
@@ -101,6 +113,11 @@ class FoundationPoseServiceNode(Node):
             RESULT_MODE_CONTINUOUS_TF,
         )
 
+        debug_path = Path(self.debug_dir).expanduser()
+        if not debug_path.is_absolute():
+            debug_path = foundationpose_root / debug_path
+        self.debug_dir = str(debug_path)
+
         self.bridge = CvBridge()
 
         # Setup debug directory
@@ -122,6 +139,9 @@ class FoundationPoseServiceNode(Node):
         self.mesh_file_path = None
         self.input_format_logged = False
         self.latest_frame = None
+        self.latest_color_msg = None
+        self.latest_depth_msg = None
+        self.sync_slop_ns = 300_000_000
 
         # Control flag
         self.tracking_enabled = False
@@ -157,27 +177,21 @@ class FoundationPoseServiceNode(Node):
             10
         )
 
-        # Synchronized subscribers for color and depth images
-        self.color_sub = message_filters.Subscriber(
-            self,
+        # Cache and pair the latest color/depth messages by timestamp. Using
+        # direct rclpy subscriptions keeps the one-shot frame cache reliable
+        # across the ROS 2 Humble message_filters versions used by this image.
+        self.color_sub = self.create_subscription(
             ROSImage,
             self.color_topic,
-            qos_profile=image_qos
+            self.color_image_callback,
+            image_qos,
         )
-        self.depth_sub = message_filters.Subscriber(
-            self,
+        self.depth_sub = self.create_subscription(
             ROSImage,
             self.depth_topic,
-            qos_profile=image_qos
+            self.depth_image_callback,
+            image_qos,
         )
-
-        # Time synchronizer for color and depth
-        self.sync = message_filters.ApproximateTimeSynchronizer(
-            [self.color_sub, self.depth_sub],
-            queue_size=20,
-            slop=0.3
-        )
-        self.sync.registerCallback(self.image_callback)
 
         self.get_logger().info("FoundationPose Service Node initialized")
         self.get_logger().info(f"Service 'load_mesh' is ready")
@@ -344,6 +358,33 @@ class FoundationPoseServiceNode(Node):
             self.intrinsics_received = True
             self.get_logger().info(f"Camera intrinsics received")
 
+    @staticmethod
+    def _stamp_nanoseconds(msg):
+        return msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+
+    def color_image_callback(self, msg):
+        self.latest_color_msg = msg
+        self._process_synchronized_images()
+
+    def depth_image_callback(self, msg):
+        self.latest_depth_msg = msg
+        self._process_synchronized_images()
+
+    def _process_synchronized_images(self):
+        if self.latest_color_msg is None or self.latest_depth_msg is None:
+            return
+
+        color_stamp = self._stamp_nanoseconds(self.latest_color_msg)
+        depth_stamp = self._stamp_nanoseconds(self.latest_depth_msg)
+        if abs(color_stamp - depth_stamp) > self.sync_slop_ns:
+            return
+
+        color_msg = self.latest_color_msg
+        depth_msg = self.latest_depth_msg
+        self.latest_color_msg = None
+        self.latest_depth_msg = None
+        self.image_callback(color_msg, depth_msg)
+
     def pose_matrix_to_transform(self, pose_matrix, timestamp):
         """Convert a 4x4 object-in-camera pose matrix to a TF message."""
         t = TransformStamped()
@@ -383,15 +424,16 @@ class FoundationPoseServiceNode(Node):
         try:
             # Convert ROS Image messages to OpenCV/numpy format
             if color_msg.encoding == 'rgb8':
-                color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+                color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='rgb8')
             elif color_msg.encoding == 'bgr8':
                 color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgr8')
+                color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
             elif color_msg.encoding == 'rgba8':
-                color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgra8')
-                color = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
+                color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='rgba8')
+                color = cv2.cvtColor(color, cv2.COLOR_RGBA2RGB)
             elif color_msg.encoding == 'bgra8':
                 color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='bgra8')
-                color = cv2.cvtColor(color, cv2.COLOR_BGRA2BGR)
+                color = cv2.cvtColor(color, cv2.COLOR_BGRA2RGB)
             else:
                 color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding='passthrough')
                 if len(color.shape) == 2:
@@ -533,13 +575,16 @@ class FoundationPoseServiceNode(Node):
                 self.score_logit = None
                 return None
 
-        return self.pose @ np.linalg.inv(self.to_origin)
+        # Preserve FoundationPose's canonical mesh frame for service responses
+        # and TF. The oriented-bounding-box frame is only for visualization.
+        return self.pose
 
     def publish_visualization(self, pose_matrix, frame):
         color = frame['color']
         K_scaled = frame['K']
-        vis = draw_posed_3d_box(K_scaled, img=color, ob_in_cam=pose_matrix, bbox=self.bbox)
-        vis = draw_xyz_axis(vis, ob_in_cam=pose_matrix, scale=0.1, K=K_scaled, thickness=3, transparency=0, is_input_rgb=True)
+        center_pose = pose_matrix @ np.linalg.inv(self.to_origin)
+        vis = draw_posed_3d_box(K_scaled, img=color, ob_in_cam=center_pose, bbox=self.bbox)
+        vis = draw_xyz_axis(vis, ob_in_cam=center_pose, scale=0.1, K=K_scaled, thickness=3, transparency=0, is_input_rgb=True)
 
         # Display score
         if self.score_logit is not None:
