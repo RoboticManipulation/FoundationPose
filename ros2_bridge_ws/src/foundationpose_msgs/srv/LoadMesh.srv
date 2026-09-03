@@ -1,14 +1,16 @@
-# Service to load mesh and control TF publishing
 # Request
 string filename        # Name of the mesh file (e.g., "mesh_000.obj")
 uint8[] data          # Raw mesh file data (binary)
 uint64 size_bytes     # Size of the mesh data in bytes
-bool enable_tracking  # Flag: true = start pose estimation, false = stop
-string result_mode    # Pose output mode: continuous_tf, service_response_once, or both (empty = server default)
+bool enable_tracking  # true = load mesh and run pose pipeline, false = stop/disable
+string result_mode    # continuous_tf | service_response_once | both (empty = server default)
+bool has_registration_mask              # true when registration_mask should be used
+sensor_msgs/Image registration_mask     # mono8 object mask (0 = background, nonzero = object)
 
 ---
 # Response
-bool success          # True if mesh loaded and tracking state changed successfully
-string message        # Status message or error description
-bool pose_valid       # True when pose contains a one-shot estimate
-geometry_msgs/TransformStamped pose  # Estimated object pose in the camera frame
+bool success                             # Whether the request completed successfully
+string message                           # Status message or error description
+bool pose_valid                          # Whether pose contains a valid one-shot estimate
+geometry_msgs/TransformStamped pose      # One-shot object pose in the camera frame
+float64 score                            # Registration score (higher is better); only meaningful when pose_valid

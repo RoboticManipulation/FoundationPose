@@ -18,8 +18,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'downscale',
-            default_value='1.0',
-            description='Downscale factor for images'
+            default_value='0.5',
+            description='Image scale; 0.5 is the tested Gemini 336 default for 16 GiB GPUs'
         ),
         DeclareLaunchArgument(
             'camera_frame',
@@ -33,8 +33,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'score_threshold',
-            default_value='100.0',
-            description='Maximum score threshold - reset tracking if score exceeds this value'
+            default_value='40.0',
+            description='Minimum diagnostic score - reject or reset below this value'
         ),
         # Orbbec Gemini 336 (depth_registration: true -> depth aligned to color)
         DeclareLaunchArgument(
@@ -88,7 +88,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'enable_visualization',
             default_value='true',
-            description='Enable/disable OpenCV visualization window'
+            description='Publish annotated pose images on /FP_result'
         ),
         DeclareLaunchArgument(
             'default_result_mode',

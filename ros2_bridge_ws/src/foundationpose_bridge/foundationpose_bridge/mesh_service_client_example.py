@@ -8,6 +8,7 @@ This script demonstrates how to:
 2. Disable tracking
 """
 
+import os
 import rclpy
 from rclpy.node import Node
 from foundationpose_msgs.srv import LoadMesh
@@ -31,14 +32,17 @@ class MeshServiceClient(Node):
         pose = response.pose.transform
         self.get_logger().info(
             'One-shot pose received: '
-            f'frame={response.pose.header.frame_id}, child={response.pose.child_frame_id}, '
-            f'translation=({pose.translation.x:.4f}, {pose.translation.y:.4f}, {pose.translation.z:.4f}), '
+            f'frame={response.pose.header.frame_id}, '
+            f'child={response.pose.child_frame_id}, '
+            f'translation=({pose.translation.x:.4f}, '
+            f'{pose.translation.y:.4f}, {pose.translation.z:.4f}), '
             f'rotation=({pose.rotation.x:.4f}, {pose.rotation.y:.4f}, '
-            f'{pose.rotation.z:.4f}, {pose.rotation.w:.4f})'
+            f'{pose.rotation.z:.4f}, {pose.rotation.w:.4f}), '
+            f'score={response.score:.2f}'
         )
 
     def load_mesh_and_enable_tracking(self, mesh_file_path, result_mode='both'):
-        """Load a mesh file and enable tracking"""
+        """Load a mesh file and enable tracking."""
         self.get_logger().info(f'Loading mesh from {mesh_file_path}...')
 
         # Read mesh file
@@ -51,11 +55,12 @@ class MeshServiceClient(Node):
 
         # Create service request
         request = LoadMesh.Request()
-        request.filename = mesh_file_path.split('/')[-1]  # Extract filename
+        request.filename = os.path.basename(mesh_file_path)
         request.data = list(mesh_data)  # Convert bytes to list of uint8
         request.size_bytes = len(mesh_data)
         request.enable_tracking = True
         request.result_mode = result_mode
+        request.has_registration_mask = False
 
         self.get_logger().info(
             f'Sending request: {request.filename} ({request.size_bytes} bytes), '
@@ -80,7 +85,7 @@ class MeshServiceClient(Node):
             return False
 
     def disable_tracking(self):
-        """Disable tracking"""
+        """Disable tracking."""
         self.get_logger().info('Disabling tracking...')
 
         # Create service request with empty mesh data
@@ -90,6 +95,7 @@ class MeshServiceClient(Node):
         request.size_bytes = 0
         request.enable_tracking = False
         request.result_mode = ''
+        request.has_registration_mask = False
 
         # Call service
         future = self.client.call_async(request)
@@ -113,9 +119,18 @@ def main(args=None):
 
     if len(sys.argv) < 2:
         print("Usage:")
-        print("  Enable tracking:  ros2 run foundationpose_bridge mesh_service_client_example <mesh_file_path> [result_mode]")
-        print("  Disable tracking: ros2 run foundationpose_bridge mesh_service_client_example disable")
-        print("  result_mode: continuous_tf | service_response_once | both (default: both)")
+        print(
+            "  Enable tracking: ros2 run foundationpose_bridge "
+            "mesh_service_client_example <mesh_file_path> [result_mode]"
+        )
+        print(
+            "  Disable tracking: ros2 run foundationpose_bridge "
+            "mesh_service_client_example disable"
+        )
+        print(
+            "  result_mode: continuous_tf | service_response_once | both "
+            "(default: both)"
+        )
         sys.exit(1)
 
     client = MeshServiceClient()
